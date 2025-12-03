@@ -1,0 +1,16 @@
+# Updated for Python 3.13 compatibility
+# Bumped minimums to versions that publish wheels for Python 3.13
+numpy>=2.1
+pandas>=2.2
+opencv-python>=4.10
+pytesseract>=0.3.13
+matplotlib>=3.9
+Pillow>=10.0
+google-generativeai>=0.8.0
+requests>=2.32.0
+openai>=1.52.0
+python-docx>=1.1.2
+docx2pdf>=0.1.8
+pdf2image>=1.17.0
+reportlab>=4.2.2
+pdfminer.six>=20240706
