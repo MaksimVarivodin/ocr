@@ -17,14 +17,15 @@ from ocr.llm import (
     get_picked_model,
     get_openrouter_client,
     test_model_health,
-    translate_blocks_openrouter,
+    translate_document_blocks,
 )
+from ocr.llm.language_detector import detect_source_language, map_lang_code_to_english_name
 from ocr.ocr import (
     preprocess_image_for_ocr,
     ocr_image_boxes,
     choose_blocks_strategy,
 )
-from ocr.image import remove_text_from_image
+from ocr.image import remove_text_from_image, remove_text_words_from_image
 from ocr.render import add_translated_text
 
 
@@ -55,12 +56,12 @@ def print_progress_bar(translated_words: int, total_words: int, done_pars: int, 
 
 def process_image_translate(
     image_path: str,
-    target_language: str = 'английский',
+    target_language: str = 'english',
     merge_strategy: str = 'paragraph',
     output_path: str = 'translated_image.jpg',
-    tesseract_cmd: Optional[str] = None,
     lang: str = 'rus+eng',
     conf_threshold: int = 30,
+    ocr_mode: str = 'auto',
     request_timeout: float | None = 60.0,
     batch_size: int = 4,
 ) -> Dict[str, Any]:
@@ -68,18 +69,16 @@ def process_image_translate(
 
     Doxygen:
     - @param image_path: Path to input image file.
-    - @param target_language: Language to translate to (may be Russian label).
+    - @param target_language: Language to translate to (e.g., 'english').
     - @param merge_strategy: One of {'line', 'paragraph', 'auto'}.
     - @param output_path: Output image file name (basename used inside folder).
-    - @param tesseract_cmd: Optional absolute path to tesseract.exe.
     - @param lang: Tesseract languages, e.g., 'rus+eng'.
     - @param conf_threshold: Minimum OCR confidence to keep words.
+    - @param ocr_mode: 'auto' for preprocessing, 'raw' for direct OCR.
     - @param request_timeout: Timeout per LLM request.
     - @param batch_size: Number of paragraphs per translation request.
     - @return: Dict with keys {'output_path', 'blocks', 'translations'}.
     """
-    if tesseract_cmd:
-        pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
     try:
         _ = pytesseract.get_tesseract_version()
         print("Tesseract found")
@@ -93,47 +92,54 @@ def process_image_translate(
     if img_bgr is None:
         raise RuntimeError(f"Failed to load image: {image_path}")
 
-    pre_bgr = preprocess_image_for_ocr(img_bgr)
-    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-    pre_rgb = cv2.cvtColor(pre_bgr, cv2.COLOR_BGR2RGB)
+    # Use raw or preprocessed image based on ocr_mode
+    if ocr_mode == 'raw':
+        ocr_input_img = img_bgr
+        print("OCR mode: 'raw'. Skipping image preprocessing.")
+    else:
+        ocr_input_img = preprocess_image_for_ocr(img_bgr)
+        print("OCR mode: 'auto'. Applying image preprocessing.")
 
-    boxes = ocr_image_boxes(pre_bgr, lang=lang, conf_threshold=conf_threshold)
+    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+    pre_rgb = cv2.cvtColor(ocr_input_img, cv2.COLOR_BGR2RGB)
+
+    boxes = ocr_image_boxes(ocr_input_img, lang=lang, conf_threshold=conf_threshold)
     print("File found and OCR completed")
 
     final_blocks = choose_blocks_strategy(boxes, pre_rgb, merge_strategy=merge_strategy)
+
+    # Detect source language from OCR text
+    try:
+        texts_for_detection = [str(b.get("text", "")) for b in final_blocks]
+        src_code, src_prob = detect_source_language(texts_for_detection)
+        src_name = map_lang_code_to_english_name(src_code) if src_code else None
+        if src_name:
+            print(f"Detected source language: {src_name} (code={src_code}, prob={src_prob:.3f})")
+        else:
+            print("Warning: failed to confidently detect source language; proceeding without explicit source.")
+    except Exception as e:
+        src_name = None
+        print(f"Warning: language detection failed: {e}")
 
     model, api_key = get_picked_model()
     client = get_openrouter_client(api_key)
     test_model_health(client, model, timeout=min(10.0, request_timeout) if request_timeout else 10.0)
     print("Model connectivity check succeeded")
 
-    img_current = remove_text_from_image(img_rgb, final_blocks)
-
-    rendered_texts: List[str] = [""] * len(final_blocks)
-
-    def _on_par(idx: int, txt: str) -> None:
-        nonlocal img_current
-        rendered_texts[idx] = txt
-        img_current = add_translated_text(img_current, [final_blocks[idx]], [txt])
-
-    translated_texts = translate_blocks_openrouter(
+    # Contextual translation of all blocks at once
+    translated_texts = translate_document_blocks(
         client,
         model,
         final_blocks,
-        target_language,
-        batch_size=batch_size,
+        target_language=target_language,
         timeout=request_timeout,
-        on_paragraph=_on_par,
     )
 
-    try:
-        for i, t in enumerate(translated_texts):
-            preview = (str(t) or "").replace("\n", " ")[:120]
-            print(f"[preview {i}] {preview}")
-    except Exception:
-        pass
-
-    img_final = img_current
+    img_current = remove_text_words_from_image(img_rgb, final_blocks)
+    
+    # Render all translated blocks onto the cleaned image
+    img_final = add_translated_text(img_current, final_blocks, translated_texts)
+    
     print("Image filled with translated text")
 
     base_filename = os.path.basename(image_path)

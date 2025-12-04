@@ -12,11 +12,45 @@ All functions include Doxygen-style documentation tags.
 from __future__ import annotations
 
 from typing import Any, Dict, List
+import os
+import json
 
 import cv2
 import numpy as np
 import pandas as pd
 import pytesseract
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+
+
+_TESSERACT_CONFIGURED = False
+
+
+def _configure_tesseract():
+    """Reads dependency paths from config/dependencies.json and configures pytesseract."""
+    global _TESSERACT_CONFIGURED
+    if _TESSERACT_CONFIGURED:
+        return
+
+    try:
+        # The root of the project is three levels up from this file (ocr/ocr/reader.py)
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        deps_path = os.path.join(project_root, "config", "dependencies.json")
+
+        if os.path.exists(deps_path):
+            with open(deps_path, "r", encoding="utf-8") as f:
+                deps = json.load(f)
+                tess_path_rel = deps.get("tesseract_path")
+                if tess_path_rel:
+                    # The path in JSON is relative to the project root
+                    tesseract_executable = os.path.abspath(os.path.join(project_root, tess_path_rel))
+                    if os.path.exists(tesseract_executable):
+                        pytesseract.pytesseract.tesseract_cmd = tesseract_executable
+                        _TESSERACT_CONFIGURED = True
+                    else:
+                        print(f"Warning: Tesseract path from config does not exist: {tesseract_executable}")
+    except Exception as e:
+        print(f"Warning: Could not configure Tesseract from dependencies.json: {e}")
 
 
 def build_dataframe_from_tesseract(data: Dict[str, Any]) -> pd.DataFrame:
@@ -116,8 +150,8 @@ def horizontal_overlap(a: Dict[str, Any], b: Dict[str, Any]) -> float:
     return inter / denom
 
 
-def split_lines_into_columns(lines: List[Dict[str, Any]], img_width: int, max_cols: int = 2) -> List[List[Dict[str, Any]]]:
-    """Split line blocks into up to `max_cols` columns based on x positions.
+def split_lines_into_columns(lines: List[Dict[str, Any]], img_width: int, max_cols: int = 4) -> List[List[Dict[str, Any]]]:
+    """Split line blocks into columns using KMeans clustering on x-coordinates.
 
     Doxygen:
     - @param lines: List of line dicts.
@@ -125,25 +159,53 @@ def split_lines_into_columns(lines: List[Dict[str, Any]], img_width: int, max_co
     - @param max_cols: Maximum number of columns to split into.
     - @return: List of columns, each a list of line dicts.
     """
-    if not lines:
-        return []
-    xs = np.array([ln['x'] for ln in lines])
-    if len(xs) < 2 or max_cols <= 1:
+    if not lines or len(lines) < 3:
         return [sorted(lines, key=lambda d: (d['y'], d['x']))]
 
-    def xrng(mask: np.ndarray) -> int:
-        idx = np.where(mask)[0]
-        return int(xs[idx].mean()) if idx.size else 0
+    xs = np.array([ln['x'] + ln['width'] / 2 for ln in lines]).reshape(-1, 1)
 
-    median_x = int(np.median(xs))
-    left_col = [ln for ln in lines if ln['x'] <= median_x]
-    right_col = [ln for ln in lines if ln['x'] > median_x]
-    cols: List[List[Dict[str, Any]]] = []
-    if left_col:
-        cols.append(sorted(left_col, key=lambda d: (d['y'], d['x'])))
-    if right_col:
-        cols.append(sorted(right_col, key=lambda d: (d['y'], d['x'])))
-    return cols[:max_cols]
+    # Determine the optimal number of columns (k)
+    k_max = min(max_cols, len(lines) // 2)
+    if k_max < 2:
+        return [sorted(lines, key=lambda d: (d['y'], d['x']))]
+
+    # Find best k for KMeans
+    inertias = []
+    for k in range(1, k_max + 1):
+        kmeans = KMeans(n_clusters=k, random_state=42, n_init='auto').fit(xs)
+        inertias.append(kmeans.inertia_)
+
+    # If inertia decreases sharply, it indicates a good k
+    # We look for an "elbow" in the inertia plot
+    try:
+        deltas = np.diff(inertias)
+        if len(deltas) > 1:
+            rel_deltas = np.abs(deltas[:-1] / (deltas[1:] + 1e-6))
+            best_k = np.argmax(rel_deltas) + 2 if np.max(rel_deltas) > 1.5 else 1
+        else:
+            best_k = 1
+    except (ValueError, IndexError):
+        best_k = 1
+
+    if best_k == 1:
+        return [sorted(lines, key=lambda d: (d['y'], d['x']))]
+
+    kmeans = KMeans(n_clusters=best_k, random_state=42, n_init='auto').fit(xs)
+    labels = kmeans.labels_
+
+    cols: List[List[Dict[str, Any]]] = [[] for _ in range(best_k)]
+    for i, line in enumerate(lines):
+        cols[labels[i]].append(line)
+
+    # Sort columns by their average x-position
+    avg_x_cols = [np.mean([line['x'] for line in col]) for col in cols]
+    sorted_cols = [col for _, col in sorted(zip(avg_x_cols, cols))]
+
+    # Sort lines within each column by y-position
+    for i in range(len(sorted_cols)):
+        sorted_cols[i] = sorted(sorted_cols[i], key=lambda d: d['y'])
+
+    return sorted_cols
 
 
 def finalize_paragraph(lines_group: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -187,6 +249,7 @@ def merge_lines_to_paragraphs(
     """
     if not lines:
         return []
+    # Sort lines primarily by y-coordinate, then x, to process top-to-bottom, left-to-right
     lines_sorted = sorted(lines, key=lambda d: (d['y'], d['x']))
     paragraphs: List[List[Dict[str, Any]]] = []
     current: List[Dict[str, Any]] = []
@@ -195,18 +258,27 @@ def merge_lines_to_paragraphs(
             current = [ln]
             continue
         last = current[-1]
+        # Check for font size similarity
         same_font = abs(ln['font_size'] - last['font_size']) <= font_tolerance * max(1.0, last['font_size'])
+        # Check for vertical proximity
         vgap = ln['y'] - (last['y'] + last['height'])
         small_gap = vgap <= vertical_gap_ratio * max(1, last.get('baseline_height', last['height']))
+        # Check for horizontal overlap
         overlap = horizontal_overlap(ln, last) >= min_overlap
+
+        # If lines are similar in font, close vertically, and overlap horizontally, merge them
         if same_font and small_gap and overlap:
             current.append(ln)
         else:
+            # Otherwise, finalize the current paragraph and start a new one
             paragraphs.append(current)
             current = [ln]
     if current:
         paragraphs.append(current)
-    return [finalize_paragraph(grp) for grp in paragraphs]
+
+    # Finalize paragraph objects and sort them one last time to ensure final reading order
+    final_paragraphs = [finalize_paragraph(grp) for grp in paragraphs]
+    return sorted(final_paragraphs, key=lambda p: (p['y'], p['x']))
 
 
 def detect_headings(paragraphs: List[Dict[str, Any]], heading_factor: float = 1.35) -> List[Dict[str, Any]]:
@@ -294,11 +366,16 @@ def choose_blocks_strategy(boxes: List[Dict[str, Any]], img_rgb: np.ndarray, mer
         df_full = build_dataframe_from_tesseract(data)
         if not df_full.empty:
             line_blocks = group_words_to_lines(df_full, min_words_in_line=1)
-            # columns split detection and paragraph merging
             img_w = int(img_rgb.shape[1]) if img_rgb is not None else 0
             cols = split_lines_into_columns(line_blocks, img_w, max_cols=2)
+
+            # Clear and rebuild paragraph_blocks from sorted columns
+            paragraph_blocks = []
             for col in cols:
                 paragraph_blocks.extend(merge_lines_to_paragraphs(col))
+
+            # Final sort of all paragraphs from all columns to ensure reading order
+            paragraph_blocks = sorted(paragraph_blocks, key=lambda p: (p['y'], p['x']))
             paragraph_blocks = detect_headings(paragraph_blocks)
     except Exception:
         # Fall back to using provided boxes only (no advanced grouping)

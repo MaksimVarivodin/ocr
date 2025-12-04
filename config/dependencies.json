@@ -1,0 +1,5 @@
+{
+  "tesseract_path": "..\\tesseract\\tesseract.exe",
+  "poppler_path": "..\\poppler\\library\\bin"
+}
+

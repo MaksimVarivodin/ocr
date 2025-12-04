@@ -1,0 +1,31 @@
+INTRODUCTION
+
+Machine learning in translation — a new perspective
+
+Machine learning (ML) enables digital computer systems to automatically learn
+from a set of training data and make decisions based on the resulting model with a
+minimum level of human intervention. From a methodology perspective, machine
+learning is a form of statistical learning that uses computational algorithms to find
+patterns in empirical data, rather than symbolic rules developed through the analy-
+sis and intuitive reflection of humans. Neural machine translation (NMT) is driven
+by machine learning, which is applied to a neural network language model' so as
+to predict what word comes next in a sequence of translated text. There are many
+more language tasks where ML can be leveraged in a translation process,
+In theory and practice, machine learning and translation do not have to be seen
+as separate undertakings. After all, there are clear links between human approaches
+to translation and a machine’s processing of data, which also result in representa-
+tions of thought and reality. While human approaches to translation follow long-
+established methods of theorization, machine approaches, originating by the way
+in the minds of computer scientists and software developers, utilize computer pro-
+grams to automate part of the translation process.
+Take an encoder-decoder ML architecture for example. In this model, machine
+learning converts a real-life translation task into a mathematical formula (encod-
+ing), and then after a series of arithmetic operations, it converts the mathematical
+formula into a translation solution (decoding). In this sense, ML can be considered
+at least a methodological and theoretical translation framework, although it may
+be premature to call it a paradigm equivalent to other translation theories such as
+equivalence, functionalism, descriptive translation studies (DTS), cultural or socio-
+logical ‘turns’ of translation studies, localization, or audiovisual translation theories,
+to name but several based primarily upon human analysis and reflection
+
+DOI: 10.4324/9781003321538-1

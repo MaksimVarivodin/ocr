@@ -64,14 +64,48 @@ def test_finalize_paragraph_and_merge():
     assert 'text' in par and 'width' in par and 'height' in par
 
 
+def test_split_lines_into_columns_single_column():
+    lines = [
+        {'x': 10, 'y': 10, 'width': 80, 'height': 12, 'text': 'Line 1'},
+        {'x': 12, 'y': 30, 'width': 80, 'height': 12, 'text': 'Line 2'},
+    ]
+    cols = split_lines_into_columns(lines, img_width=200, max_cols=2)
+    assert isinstance(cols, list)
+    assert len(cols) == 1
+    assert len(cols[0]) == 2
+
+
 def test_split_lines_into_columns_two_columns_detected():
-    # Create two columns far apart
+    # KMeans should be able to separate these two distinct clusters
     lines = [
         {'x': 10, 'y': 10, 'width': 80, 'height': 12, 'text': 'L1'},
         {'x': 15, 'y': 30, 'width': 80, 'height': 12, 'text': 'L2'},
+        {'x': 12, 'y': 50, 'width': 80, 'height': 12, 'text': 'L3'},
         {'x': 400, 'y': 12, 'width': 80, 'height': 12, 'text': 'R1'},
         {'x': 410, 'y': 28, 'width': 80, 'height': 12, 'text': 'R2'},
+        {'x': 405, 'y': 52, 'width': 80, 'height': 12, 'text': 'R3'},
     ]
     cols = split_lines_into_columns(lines, img_width=600, max_cols=2)
     assert isinstance(cols, list)
-    assert len(cols) >= 2
+    assert len(cols) == 2
+    # Check if columns are correctly sorted by x-position
+    assert cols[0][0]['x'] < 200
+    assert cols[1][0]['x'] > 200
+    # Check if lines within columns are sorted by y-position
+    assert cols[0][0]['y'] < cols[0][1]['y'] < cols[0][2]['y']
+    assert cols[1][0]['y'] < cols[1][1]['y'] < cols[1][2]['y']
+
+
+def test_merge_lines_to_paragraphs_merges_correctly():
+    df = _make_df_for_lines()
+    lines = group_words_to_lines(df)
+    paragraphs = merge_lines_to_paragraphs(lines)
+    assert isinstance(paragraphs, list)
+    assert len(paragraphs) == 1
+    par = paragraphs[0]
+    assert 'text' in par
+    assert par['text'] == 'ABC'  # Assuming A, B, C are merged
+    assert 'width' in par
+    assert 'height' in par
+    assert par['width'] == 330  # 10 + 10 + 10 + 300 + 10 (assuming no gaps)
+    assert par['height'] == 14  # Max height of the lines

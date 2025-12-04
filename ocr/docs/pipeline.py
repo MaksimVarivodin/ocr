@@ -27,12 +27,14 @@ def _detect_type(path: str) -> str:
 
 def process_document(
     file_path: str,
-    target_language: str = "английский",
+    target_language: str = "english",
     out_format: str = "docx",
     debug_buffer: bool = False,
     image_merge_strategy: str = "paragraph",
     request_timeout: float | None = 60.0,
     batch_size: int = 6,
+    translate: bool = False,
+    poppler_path: str | None = None,
 ) -> Dict[str, str]:
     """High-level pipeline for documents: read → translate → write DOCX → (optional) PDF.
 
@@ -53,7 +55,7 @@ def process_document(
             doc = read_docx(file_path, buffer)
         elif doc_type == "pdf":
             # Phase 1: treat as scanned PDF (pages as images)
-            doc = read_pdf_scanned(file_path, buffer)
+            doc = read_pdf_scanned(file_path, buffer, poppler_path=poppler_path)
         else:
             raise ValueError(f"Unsupported file type: {file_path}")
 
@@ -66,7 +68,7 @@ def process_document(
                 texts.append(item.text)
                 text_indices.append(idx)
 
-        if texts:
+        if texts and translate:
             model, api_key = get_picked_model()
             client = get_openrouter_client(api_key)
             out_texts = translate_batch_openrouter(
@@ -78,23 +80,30 @@ def process_document(
                 if isinstance(item, TextRun):
                     item.translated_text = out_texts[j] if j < len(out_texts) else item.text
                     j += 1
+        elif texts:  # If not translating, just copy original text to translated field
+            for item in all_items:
+                if isinstance(item, TextRun):
+                    item.translated_text = item.text
 
         # 3) Translate images via existing image pipeline (per image)
         for item in all_items:
             if isinstance(item, ImageItem):
-                # process_image_translate returns dict with 'output_image_path'
-                try:
-                    result = process_image_translate(
-                        image_path=item.src_path,
-                        target_language=target_language,
-                        merge_strategy=image_merge_strategy,
-                        output_path=os.path.basename(item.src_path),
-                        request_timeout=request_timeout,
-                        batch_size=batch_size,
-                    )
-                    item.translated_path = result.get("output_image_path") or result.get("output_path")
-                except Exception:
-                    # Fallback: leave original image
+                if translate:
+                    # process_image_translate returns dict with 'output_image_path'
+                    try:
+                        result = process_image_translate(
+                            image_path=item.src_path,
+                            target_language=target_language,
+                            merge_strategy=image_merge_strategy,
+                            output_path=os.path.basename(item.src_path),
+                            request_timeout=request_timeout,
+                            batch_size=batch_size,
+                        )
+                        item.translated_path = result.get("output_image_path") or result.get("output_path")
+                    except Exception:
+                        # Fallback: leave original image
+                        item.translated_path = item.src_path
+                else:
                     item.translated_path = item.src_path
 
         # 4) Write output
@@ -115,6 +124,7 @@ def process_document(
             # Convert DOCX → PDF via docx2pdf if available
             try:
                 from docx2pdf import convert
+
                 out_pdf = os.path.join(base_dir, f"{base_name}.translated.pdf")
                 convert(out_docx, out_pdf)
                 out["pdf"] = out_pdf

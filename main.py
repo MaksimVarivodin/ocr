@@ -13,6 +13,7 @@ Packages:
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any, Dict, List, Tuple
 
@@ -31,6 +32,7 @@ from ocr.llm.translate import (
     translate_batch_openrouter,
     translate_blocks_openrouter,
 )
+from ocr.llm.language_detector import normalize_and_validate_target_language
 
 # OCR utilities
 from ocr.ocr.reader import (
@@ -49,8 +51,8 @@ from ocr.ocr.reader import (
 # Image processing and rendering
 from ocr.image.processing import (
     get_background_color as _get_background_color,
-    remove_text_from_image,
 )
+from ocr.image import remove_text_from_image
 from ocr.render.draw import add_translated_text
 
 # High-level pipeline
@@ -107,6 +109,7 @@ def _cli() -> None:
     --tesseract: Path to tesseract executable (optional)
     --lang: Tesseract languages (default: rus+eng)
     --conf: OCR confidence threshold (default: 30)
+    --ocr-mode: OCR preprocessing mode: 'auto' for scanned docs, 'raw' for clean images (default: auto)
     --timeout: Per-request timeout seconds (<=0 means no timeout)
     --batch-size: Paragraphs per request (default: 4)
 
@@ -124,28 +127,42 @@ def _cli() -> None:
     parser.add_argument("--debug-buffer", action="store_true", help="Keep buffer directory under config/buffer")
     # image mode
     parser.add_argument("--image", "-i", type=str, help="Path to input image to translate")
-    parser.add_argument("--target", "-t", type=str, default="английский", help="Target language for translation (default: английский)")
+    parser.add_argument("--target", "-t", type=str, default="english", help="Target language for translation (default: english)")
     parser.add_argument("--merge", "-m", type=str, default="paragraph", choices=["word", "line", "paragraph", "auto"], help="Block merge strategy (default: paragraph)")
     parser.add_argument("--out", "-o", type=str, default="translated_image.jpg", help="Path to save translated image (default: translated_image.jpg)")
-    parser.add_argument("--tesseract", type=str, default=os.getenv("TESSERACT_CMD"), help="Path to tesseract executable; if omitted, uses pytesseract defaults or TESSERACT_CMD env var")
     parser.add_argument("--lang", type=str, default="rus+eng", help="Tesseract languages (default: rus+eng)")
     parser.add_argument("--conf", type=int, default=30, help="Confidence threshold for OCR boxes (default: 30)")
+    parser.add_argument("--ocr-mode", type=str, default="auto", choices=["auto", "raw"], help="OCR preprocessing mode: 'auto' for scanned docs, 'raw' for clean images (default: auto)")
     parser.add_argument("--timeout", type=float, default=60.0, help="Per-request timeout in seconds for OpenRouter API (default: 60.0; set 0 or negative for no timeout)")
     parser.add_argument("--batch-size", type=int, default=4, help="Number of paragraphs to send per LLM request (default: 4)")
+    parser.add_argument("--translate", action="store_true", help="Enable translation for document processing")
 
     args = parser.parse_args()
+
+    # Configure external dependencies like Tesseract and get Poppler path
+    from ocr.config import configure_dependencies
+    poppler_path = configure_dependencies()
+
+    # Validate that target language name is provided in English
+    try:
+        validated_target = normalize_and_validate_target_language(args.target)
+    except ValueError as e:
+        print(str(e))
+        raise SystemExit(2)
 
     # Document mode takes precedence if --file is provided
     if args.file:
         timeout_value = None if args.timeout is not None and args.timeout <= 0 else args.timeout
         result = process_document(
             file_path=args.file,
-            target_language=args.target,
+            target_language=validated_target,
             out_format=args.out_format,
             debug_buffer=bool(args.debug_buffer),
             image_merge_strategy=args.merge,
             request_timeout=timeout_value,
             batch_size=args.batch_size,
+            translate=args.translate,
+            poppler_path=poppler_path,
         )
         # Print produced paths
         for k, v in result.items():
@@ -154,18 +171,18 @@ def _cli() -> None:
 
     if not args.image:
         print("Please provide either --file (txt|docx|pdf) or --image path to translate.")
-        print("Examples:\n  python main.py --file path\\to\\doc.docx --out-format pdf\n  python main.py --image path\\to\\image.png --target английский --merge paragraph")
+        print("Examples:\n  python main.py --file path\\to\\doc.docx --out-format pdf\n  python main.py --image path\\to\\image.png --target english --merge paragraph")
         raise SystemExit(2)
 
     timeout_value = None if args.timeout is not None and args.timeout <= 0 else args.timeout
     result = process_image_translate(
         image_path=args.image,
-        target_language=args.target,
+        target_language=validated_target,
         merge_strategy=args.merge,
         output_path=args.out,
-        tesseract_cmd=args.tesseract,
         lang=args.lang,
         conf_threshold=args.conf,
+        ocr_mode=args.ocr_mode,
         request_timeout=timeout_value,
         batch_size=args.batch_size,
     )

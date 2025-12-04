@@ -3,9 +3,11 @@
 from .processing import (
     get_background_color,
     remove_text_from_image,
+    remove_text_words_from_image,
 )
 
 __all__ = [
     "get_background_color",
     "remove_text_from_image",
+    "remove_text_words_from_image",
 ]

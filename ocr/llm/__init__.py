@@ -16,6 +16,7 @@ from .translate import (
     translate_text_openrouter,
     translate_batch_openrouter,
     translate_blocks_openrouter,
+    translate_document_blocks,
 )
 
 __all__ = [
@@ -27,4 +28,5 @@ __all__ = [
     "translate_text_openrouter",
     "translate_batch_openrouter",
     "translate_blocks_openrouter",
+    "translate_document_blocks",
 ]

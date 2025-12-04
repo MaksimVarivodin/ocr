@@ -155,6 +155,17 @@ def add_translated_text(img: np.ndarray, boxes: List[Dict[str, Any]], translated
         return (bbox[2] - bbox[0], bbox[3] - bbox[1])
 
     def _layout_lines(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> List[str]:
+        # Respect explicit line breaks first
+        if "\n" in str(text):
+            raw_lines = [ln.strip() for ln in str(text).splitlines()]
+            wrapped_lines = []
+            for line in raw_lines:
+                wrapped_lines.extend(_wrap_line(line, font, max_width))
+            return wrapped_lines
+
+        return _wrap_line(text, font, max_width)
+
+    def _wrap_line(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> List[str]:
         words = str(text).split()
         if not words:
             return []
@@ -232,12 +243,23 @@ def add_translated_text(img: np.ndarray, boxes: List[Dict[str, Any]], translated
         font_name = str(box.get('font_name') or '')
         line_spacing = int(box.get('line_spacing', 2))
         alignment = str(box.get('alignment', 'left')).lower()
+        # Use OCR-estimated font size if available to preserve relative sizes
+        target_font_size = int(box.get('font_size') or 0)
+        if target_font_size <= 0:
+            target_font_size = max(12, int(0.85 * h))
+        # Slightly larger range for headings
+        if box.get('is_heading'):
+            low = max(8, int(0.9 * target_font_size))
+            high = int(1.3 * target_font_size)
+        else:
+            low = max(8, int(0.8 * target_font_size))
+            high = int(1.2 * target_font_size)
         if not font_name:
             for cand in CANDIDATE_FONTS:
                 font_name = cand
                 break
-        best_size = _max_fitting_font_size(str(text), font_name, inner_w, inner_h, line_spacing, low=8, high=max(12, int(0.9 * h)))
-        font = _load_font_by_name(font_name, best_size or 12)
+        best_size = _max_fitting_font_size(str(text), font_name, inner_w, inner_h, line_spacing, low=low, high=high)
+        font = _load_font_by_name(font_name, best_size or target_font_size or 12)
         lines = _layout_lines(str(text), font, inner_w)
         line_h = (font.size if hasattr(font, 'size') else 12) + line_spacing
         start_y = y + (h - len(lines) * line_h) // 2

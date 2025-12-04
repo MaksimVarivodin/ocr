@@ -55,3 +55,44 @@ def remove_text_from_image(img: np.ndarray, boxes: List[Dict[str, Any]]) -> np.n
             roi_blurred = cv2.GaussianBlur(roi, (5, 5), 0)
             img_cleaned[y:y+h, x:x+w] = roi_blurred
     return img_cleaned
+
+
+def remove_text_words_from_image(img: np.ndarray, blocks: List[Dict[str, Any]]) -> np.ndarray:
+    """More precise text removal using word-level boxes when available.
+
+    If a block contains a ``words`` list with per-word geometry, those
+    rectangles (slightly padded) are used instead of the whole block
+    rectangle. This helps avoid leftover glyph fragments and preserves
+    more of the background.
+    """
+    img_cleaned = img.copy()
+    height, width = img.shape[:2]
+    for block in blocks:
+        words = block.get("words")
+        if not words:
+            # Fallback: use whole block rectangle
+            x, y, w, h = int(block["x"]), int(block["y"]), int(block["width"]), int(block["height"])
+            bg_color = get_background_color(img, x, y, w, h)
+            cv2.rectangle(img_cleaned, (x, y), (x + w, y + h), bg_color.tolist(), -1)
+            continue
+        for wbox in words:
+            x = int(wbox.get("x", 0))
+            y = int(wbox.get("y", 0))
+            w = int(wbox.get("width", 0))
+            h = int(wbox.get("height", 0))
+            if w <= 0 or h <= 0:
+                continue
+            pad = max(1, int(0.12 * max(w, h)))
+            x0 = max(0, x - pad)
+            y0 = max(0, y - pad)
+            x1 = min(width, x + w + pad)
+            y1 = min(height, y + h + pad)
+            if x1 <= x0 or y1 <= y0:
+                continue
+            bg_color = get_background_color(img, x0, y0, x1 - x0, y1 - y0)
+            cv2.rectangle(img_cleaned, (x0, y0), (x1, y1), bg_color.tolist(), -1)
+            roi = img_cleaned[y0:y1, x0:x1]
+            if roi.size:
+                roi_blurred = cv2.GaussianBlur(roi, (3, 3), 0)
+                img_cleaned[y0:y1, x0:x1] = roi_blurred
+    return img_cleaned

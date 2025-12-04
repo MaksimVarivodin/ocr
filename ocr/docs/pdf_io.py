@@ -38,18 +38,39 @@ def _ensure_poppler_env() -> None:
             break
 
 
-def read_pdf_scanned(path: str, buffer: BufferManager, dpi: int = 200) -> Document:
-    """Render each page of a scanned PDF into an image and return as ImageItems.
+def read_pdf_scanned(
+    path: str,
+    buffer: BufferManager,
+    dpi: int = 300,
+    fmt: str = "jpeg",
+    grayscale: bool = False,
+    poppler_path: str | None = None,
+) -> Document:
+    """Read a PDF as a series of scanned images.
 
-    Requires pdf2image and a working Poppler installation in PATH or POPPLER_PATH.
+    Args:
+        path: Path to the PDF file.
+        buffer: The buffer manager to store intermediate images.
+        dpi: Resolution for rendering pages.
+        fmt: Image format for intermediate files.
+        grayscale: Whether to convert images to grayscale.
+        poppler_path: Path to the Poppler binary directory.
+
+    Returns:
+        A Document object where each page is an image.
     """
-    _ensure_poppler_env()
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"PDF file not found: {path}")
+
     try:
         from pdf2image import convert_from_path
-    except Exception as e:
-        raise RuntimeError("pdf2image is required to process scanned PDFs") from e
+    except ImportError as e:
+        raise RuntimeError(
+            "pdf2image is required to process scanned PDFs. Please install it (`pip install pdf2image`) "
+            "and ensure Poppler is installed and configured."
+        ) from e
 
-    pages_imgs = convert_from_path(path, dpi=dpi)
+    pages_imgs = convert_from_path(path, dpi=dpi, poppler_path=poppler_path)
     pages: List[Page] = []
     for pi, pil_img in enumerate(pages_imgs):
         page = Page(index=pi)
